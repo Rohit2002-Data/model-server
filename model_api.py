@@ -1,15 +1,24 @@
 from fastapi import FastAPI, Request
 import requests
 import os
+from dotenv import load_dotenv
 
-# Hugging Face Inference API setup
+# Load environment variables from .env (for local development)
+load_dotenv()
+
+# Hugging Face API details
 HF_API_URL = "https://api-inference.huggingface.co/models/distilgpt2"
-HF_API_TOKEN = os.getenv("HF_API_TOKEN", "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")  # REPLACE this or use .env
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+
+# Ensure the token is available
+if HF_API_TOKEN is None:
+    raise ValueError("HF_API_TOKEN is not set. Please set it in the environment or .env file.")
+
 HF_HEADERS = {
     "Authorization": f"Bearer {HF_API_TOKEN}"
 }
 
-# FastAPI app instance
+# Initialize FastAPI app
 app = FastAPI()
 
 @app.get("/")
@@ -37,7 +46,6 @@ async def generate(request: Request):
         response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
         result = response.json()
 
-        # Handle response
         if isinstance(result, list) and "generated_text" in result[0]:
             return {"response": result[0]["generated_text"]}
         else:
