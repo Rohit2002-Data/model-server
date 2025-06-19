@@ -1,61 +1,47 @@
 from fastapi import FastAPI, Request
-from transformers import AutoModelForCausalLM
-import torch
-import gc
+import requests
 import os
 
-# Force no CUDA, no unnecessary warnings
-os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
-torch.set_grad_enabled(False)
+# Hugging Face Inference API setup
+HF_API_URL = "https://api-inference.huggingface.co/models/distilgpt2"
+HF_API_TOKEN = os.getenv("HF_API_TOKEN", "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")  # REPLACE this or use .env
+HF_HEADERS = {
+    "Authorization": f"Bearer {HF_API_TOKEN}"
+}
 
-# Initialize FastAPI
+# FastAPI app instance
 app = FastAPI()
 
-# Load distilgpt2 model in ultra-low RAM mode
-model = AutoModelForCausalLM.from_pretrained(
-    "distilgpt2",
-    torch_dtype=torch.float16,
-    low_cpu_mem_usage=True
-)
-model.to("cpu")
-model.eval()
-
 @app.get("/")
-def root():
-    return {"message": "Ultra-Optimized distilgpt2 Model API is running."}
+def home():
+    return {"message": "Hugging Face distilgpt2 API is ready."}
 
 @app.post("/generate/")
 async def generate(request: Request):
     try:
         data = await request.json()
-        input_ids = data.get("input_ids")
-        attention_mask = data.get("attention_mask")
+        prompt = data.get("prompt", "").strip()
 
-        if not input_ids:
-            return {"error": "Missing input_ids"}
+        if not prompt:
+            return {"error": "Prompt is empty"}
 
-        # Convert to torch tensors (single batch, no float ops)
-        input_tensor = torch.tensor([input_ids], dtype=torch.long)
-        attn_tensor = torch.tensor([attention_mask], dtype=torch.long) if attention_mask else None
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 30,
+                "do_sample": True,
+                "temperature": 0.7
+            }
+        }
 
-        # Generation (no gradients, small output)
-        with torch.inference_mode():
-            output = model.generate(
-                input_ids=input_tensor,
-                attention_mask=attn_tensor if attn_tensor is not None else None,
-                max_new_tokens=15,                   # 🔥 smaller generation
-                do_sample=False,                     # 🔥 no sampling = less compute
-                temperature=0.7,
-                pad_token_id=model.config.eos_token_id  # to avoid pad_token errors
-            )
+        response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
+        result = response.json()
 
-        # Return raw output token IDs
-        return {"output_ids": output.tolist()}
+        # Handle response
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return {"response": result[0]["generated_text"]}
+        else:
+            return {"error": result}
 
     except Exception as e:
-        return {"error": f"Exception: {str(e)}"}
-
-    finally:
-        # 🔥 Always free memory explicitly
-        del input_tensor, attn_tensor, output
-        gc.collect()
+        return {"error": f"Exception occurred: {str(e)}"}
