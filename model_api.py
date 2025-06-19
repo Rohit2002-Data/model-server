@@ -1,45 +1,61 @@
 from fastapi import FastAPI, Request
 from transformers import AutoModelForCausalLM
 import torch
+import gc
+import os
 
-# Use float16 and disable gradients to save memory
+# Force no CUDA, no unnecessary warnings
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 torch.set_grad_enabled(False)
 
-# Load model in eval mode, with low memory footprint
-model = AutoModelForCausalLM.from_pretrained(
-    "distilgpt2",
-    torch_dtype=torch.float16  # Use half precision
-).to("cpu")
-model.eval()
-
+# Initialize FastAPI
 app = FastAPI()
 
+# Load distilgpt2 model in ultra-low RAM mode
+model = AutoModelForCausalLM.from_pretrained(
+    "distilgpt2",
+    torch_dtype=torch.float16,
+    low_cpu_mem_usage=True
+)
+model.to("cpu")
+model.eval()
+
 @app.get("/")
-def home():
-    return {"message": "Model API is ready (low-memory mode)."}
+def root():
+    return {"message": "Ultra-Optimized distilgpt2 Model API is running."}
 
 @app.post("/generate/")
 async def generate(request: Request):
-    data = await request.json()
-    input_ids = data.get("input_ids")
-    attention_mask = data.get("attention_mask")
-
-    if not input_ids:
-        return {"error": "input_ids are missing"}
-
-    # Move tensors to CPU and cast to float16
-    inputs = {
-        "input_ids": torch.tensor(input_ids, dtype=torch.long),
-        "attention_mask": torch.tensor(attention_mask, dtype=torch.long) if attention_mask else None
-    }
-
     try:
-        output = model.generate(
-            **inputs,
-            max_new_tokens=20,      # reduced tokens
-            do_sample=True,
-            temperature=0.7
-        )
+        data = await request.json()
+        input_ids = data.get("input_ids")
+        attention_mask = data.get("attention_mask")
+
+        if not input_ids:
+            return {"error": "Missing input_ids"}
+
+        # Convert to torch tensors (single batch, no float ops)
+        input_tensor = torch.tensor([input_ids], dtype=torch.long)
+        attn_tensor = torch.tensor([attention_mask], dtype=torch.long) if attention_mask else None
+
+        # Generation (no gradients, small output)
+        with torch.inference_mode():
+            output = model.generate(
+                input_ids=input_tensor,
+                attention_mask=attn_tensor if attn_tensor is not None else None,
+                max_new_tokens=15,                   # 🔥 smaller generation
+                do_sample=False,                     # 🔥 no sampling = less compute
+                temperature=0.7,
+                pad_token_id=model.config.eos_token_id  # to avoid pad_token errors
+            )
+
+        # Return raw output token IDs
         return {"output_ids": output.tolist()}
-    except RuntimeError as e:
-        return {"error": f"Model ran out of memory: {str(e)}"}
+
+    except Exception as e:
+        return {"error": f"Exception: {str(e)}"}
+
+    finally:
+        # 🔥 Always free memory explicitly
+        del input_tensor, attn_tensor, output
+        gc.collect()
